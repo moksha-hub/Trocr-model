@@ -2,7 +2,7 @@
 historical Spanish handwritten text from the 17th century   using the SANR dataset for this purpose.
 
 Your Project: Fine-tuning TrOCR for 17th-Century Spanish Handwriting Recognition
-You are fine-tuning the TrOCR model (Transformer-based OCR) using the SANR dataset on **##Google Colab free tier**  only to recognize 17th-century Spanish handwritten text.
+You are fine-tuning the TrOCR model (Transformer-based OCR) using the SANR dataset on ##**Google Colab free tier**##  only to recognize 17th-century Spanish handwritten text.
 
 🛠️ Project Breakdown
 1️⃣ Dataset: SANR (Spanish Archive of Notarial Records)
