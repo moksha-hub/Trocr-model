@@ -1,4 +1,4 @@
-###Note: I am not TrOCR centric you can use any But moto is to get >80% accuracy.
+##Note: I am not TrOCR centric you can use any But moto is to get >80% accuracy.
 Here's a focused explanation of your task:
 
 ## Hybrid OCR Model for 17th Century Spanish Text
