@@ -1,15 +1,4 @@
-import os
-import json
-import random
-import numpy as np
-import pandas as pd
-import torch
-import xml.etree.ElementTree as ET
-
-from PIL import Image, ImageOps, ImageFilter
-from torchvision import transforms
-from datasets import Dataset
-
+import warnings
 from transformers import (
     TrOCRProcessor,
     VisionEncoderDecoderModel,
@@ -18,155 +7,104 @@ from transformers import (
     default_data_collator,
     EarlyStoppingCallback
 )
+from datasets import Dataset
 from evaluate import load as load_metric
+import numpy as np
+import pandas as pd
+import os
+from PIL import Image, ImageOps, ImageFilter
+import xml.etree.ElementTree as ET
+import json
+import random
+import torch
+from torchvision import transforms
 
-# -------------------------------
-# 1. Helper function to parse XML and extract all bounding boxes plus metadata
-# -------------------------------
-def parse_xml(xml_path):
+# Suppress specific warnings
+warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
+warnings.filterwarnings("ignore", category=FutureWarning, module="huggingface_hub")
+
+MODEL_CHECKPOINT = "microsoft/trocr-base-handwritten"
+
+# Initialize processor and model in online mode
+processor = TrOCRProcessor.from_pretrained(MODEL_CHECKPOINT)
+model = VisionEncoderDecoderModel.from_pretrained(MODEL_CHECKPOINT)
+
+# Configure beam search and model regularization
+model.config.decoder.num_beams = 10
+model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
+model.config.pad_token_id = processor.tokenizer.pad_token_id
+model.config.attention_dropout = 0.15
+model.config.activation_dropout = 0.15
+model.config.use_cache = False
+
+##############################
+# XML Preprocessing Logic
+##############################
+def parse_xml_annotation(xml_path):
     """
-    Parses the XML file to extract all <object> bounding boxes and image metadata.
-    Returns a dict with:
-      {
-        "bboxes": [ {"name": ..., "bbox": (xmin, ymin, xmax, ymax)}, ... ],
-        "filename": "100.jpg",
-        "width": 5096,
-        "height": 3296
-      }
-    If no bounding boxes found, returns None.
+    Parses a Pascal VOC style XML file and extracts the filename and a list of annotations.
+    Each annotation is a dict with 'text' (label) and 'bbox' (xmin, ymin, xmax, ymax).
     """
-    results = {"bboxes": []}
-    try:
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    filename = root.find("filename").text
+    annotations = []
+    for obj in root.findall("object"):
+        # Split by comma and take the last part, then strip whitespace
+        name = obj.find("name").text.split(",")[-1].strip()
+        bbox = obj.find("bndbox")
+        xmin = int(bbox.find("xmin").text)
+        ymin = int(bbox.find("ymin").text)
+        xmax = int(bbox.find("xmax").text)
+        ymax = int(bbox.find("ymax").text)
+        annotations.append({
+            "text": name,
+            "bbox": (xmin, ymin, xmax, ymax)
+        })
+    return filename, annotations
 
-        # Optional: get filename and size info
-        filename_node = root.find("filename")
-        if filename_node is not None:
-            results["filename"] = filename_node.text
-        size_node = root.find("size")
-        if size_node is not None:
-            w = size_node.find("width")
-            h = size_node.find("height")
-            if w is not None and h is not None:
-                results["width"] = int(w.text)
-                results["height"] = int(h.text)
-
-        # Parse all object bounding boxes
-        for obj in root.findall("object"):
-            obj_name = obj.find("name").text if obj.find("name") is not None else None
-            bndbox = obj.find("bndbox")
-            if bndbox is not None:
-                xmin = int(bndbox.find("xmin").text)
-                ymin = int(bndbox.find("ymin").text)
-                xmax = int(bndbox.find("xmax").text)
-                ymax = int(bndbox.find("ymax").text)
-                results["bboxes"].append({
-                    "name": obj_name,
-                    "bbox": (xmin, ymin, xmax, ymax)
-                })
-    except Exception as e:
-        print(f"Error parsing XML {xml_path}: {e}")
-    if len(results["bboxes"]) == 0:
-        return None
-    return results
-
-# -------------------------------
-# 2. Load and process data by linking JSON records with XML info
-# -------------------------------
 def load_and_process_data():
     """
-    Reads dataset/Labeled Data.json, finds matching images in dataset/Images,
-    parses the corresponding XML files from dataset/Annotations, and unifies all
-    bounding boxes into one (with added padding later during preprocessing).
-    Returns a Hugging Face Dataset with columns:
-      [image_path, text, id, xml_data]
+    Loads XML annotation files from the dataset/Images directory.
+    For each XML, it finds the corresponding .jpg image and processes each annotation
+    as a separate sample with its image path, text label, and bounding box.
     """
-    annotation_file = os.path.join("dataset", "Labeled Data.json")
-    with open(annotation_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    records = data.get("records", [])
-
-    image_dir = os.path.join("dataset", "Images")
-    xml_dir = os.path.join("dataset", "Annotations")
-
-    valid_images = [f for f in os.listdir(image_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
-    # Map image number (basename without extension) to filename
-    image_numbers = {os.path.splitext(f)[0]: f for f in valid_images}
-
+    dataset_dir = "dataset"
+    image_dir = os.path.join(dataset_dir, "Images")
+    
     dataset_items = []
-    for record in records:
-        image_num = str(record.get("image_number", ""))
-        image_filename = image_numbers.get(image_num, None)
-        if image_filename and record.get("content"):
-            image_path = os.path.join(image_dir, image_filename)
-            text = record["content"]
-
-            # Attempt to parse XML file
-            xml_filename = image_num + ".xml"
-            xml_path = os.path.join(xml_dir, xml_filename)
-            xml_info = parse_xml(xml_path) if os.path.exists(xml_path) else None
-
-            # If XML info exists, unify all bounding boxes into one enclosing box
-            unified_bbox = None
-            if xml_info:
-                all_bboxes = xml_info["bboxes"]
-                minx = min([b["bbox"][0] for b in all_bboxes])
-                miny = min([b["bbox"][1] for b in all_bboxes])
-                maxx = max([b["bbox"][2] for b in all_bboxes])
-                maxy = max([b["bbox"][3] for b in all_bboxes])
-                unified_bbox = (minx, miny, maxx, maxy)
-
-            dataset_items.append({
-                "image_path": image_path,
-                "text": text,
-                "id": record.get("id", ""),
-                "xml_data": {
-                    "filename": xml_info["filename"] if xml_info else None,
-                    "width": xml_info["width"] if xml_info and "width" in xml_info else None,
-                    "height": xml_info["height"] if xml_info and "height" in xml_info else None,
-                    "unified_bbox": unified_bbox
-                } if xml_info else None
-            })
-
+    for file in os.listdir(image_dir):
+        if file.endswith(".xml"):
+            xml_path = os.path.join(image_dir, file)
+            img_file = file.replace('.xml', '.jpg')
+            image_path = os.path.join(image_dir, img_file)
+            if not os.path.exists(image_path):
+                continue
+            _, annotations = parse_xml_annotation(xml_path)
+            for anno in annotations:
+                dataset_items.append({
+                    "image_path": image_path,
+                    "text": anno["text"],
+                    "bbox": anno["bbox"]
+                })
     df = pd.DataFrame(dataset_items)
     return Dataset.from_pandas(df)
 
 full_dataset = load_and_process_data()
 dataset_split = full_dataset.train_test_split(test_size=0.1, shuffle=True, seed=42)
-train_dataset = dataset_split["train"]
-eval_dataset = dataset_split["test"]
-print(f"Train samples: {len(train_dataset)}, Eval samples: {len(eval_dataset)}")
+train_dataset = dataset_split['train']
+eval_dataset = dataset_split['test']
+print(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
 
-# -------------------------------
-# 3. Enhanced image augmentations
-# -------------------------------
+##############################
+# Data Augmentations and Preprocessing
+##############################
 augmentation_transforms = transforms.Compose([
-    transforms.RandomApply([transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4)], p=0.6),
-    transforms.RandomAffine(degrees=3, translate=(0.03, 0.03), shear=3, fill=255),
-    transforms.RandomApply([transforms.GaussianBlur(kernel_size=(3, 5), sigma=(0.2, 2.5))], p=0.4),
-    transforms.RandomApply([transforms.RandomRotation(degrees=2)], p=0.3),
-    transforms.Resize((384, 384))
+    transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2)], p=0.3),
+    transforms.RandomAffine(degrees=2, translate=(0.02, 0.02), shear=2, fill=255),
+    transforms.RandomApply([transforms.Lambda(lambda img: ImageOps.autocontrast(img))], p=0.3),
+    transforms.Resize((384, 384))  # Consider reducing to (256,256) if needed
 ])
-
-# -------------------------------
-# 4. Initialize processor and model
-# -------------------------------
-processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
-model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
-model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
-model.config.pad_token_id = processor.tokenizer.pad_token_id
-model.config.attention_dropout = 0.15
-model.config.activation_dropout = 0.15
-
-# Enable gradient checkpointing and disable cache for memory efficiency on T4 GPUs
-model.gradient_checkpointing_enable()
-model.config.use_cache = False
-
-# -------------------------------
-# 5. Preprocess function with bounding box cropping (with padding) and dynamic image/text processing
-# -------------------------------
-PADDING = 10  # Extra padding around bounding box
 
 def preprocess_function(examples):
     images = []
@@ -174,119 +112,82 @@ def preprocess_function(examples):
     for idx, path in enumerate(examples["image_path"]):
         try:
             img = Image.open(path).convert("RGB")
-            xml_info = examples["xml_data"][idx]
-            if xml_info and "unified_bbox" in xml_info and xml_info["unified_bbox"] is not None:
-                xmin, ymin, xmax, ymax = xml_info["unified_bbox"]
-                # Add padding (ensuring we remain within image bounds)
-                xmin = max(0, xmin - PADDING)
-                ymin = max(0, ymin - PADDING)
-                xmax = min(img.width, xmax + PADDING)
-                ymax = min(img.height, ymax + PADDING)
-                img = img.crop((xmin, ymin, xmax, ymax))
-            # Apply random invert
-            if random.random() > 0.5:
-                img = ImageOps.invert(img)
-            # Apply enhanced transforms
+            # Crop using bounding box from the XML annotation
+            img = img.crop(examples["bbox"][idx])
             img = augmentation_transforms(img)
-            # Optionally apply random sharpen
-            if random.random() > 0.8:
+            # Optionally, add a low-probability sharpen filter
+            if random.random() > 0.9:
                 img = img.filter(ImageFilter.SHARPEN)
             images.append(img)
             valid_indices.append(idx)
         except Exception as e:
-            print(f"Error loading {path}: {e} (Skipping)")
+            print(f"Error processing {examples['image_path'][idx]}: {e}")
     valid_texts = [examples["text"][i] for i in valid_indices]
     if not valid_texts:
         return {}
-
-    # Use fixed padding ("max_length") to ensure consistent tensor shapes
     encodings = processor(
         images=images,
         text=valid_texts,
         padding="max_length",
         truncation=True,
-        max_length=128,
         return_tensors="pt"
     )
-    labels = encodings["labels"].clone()
-    labels[labels == processor.tokenizer.pad_token_id] = -100
-    encodings["labels"] = labels
+    encodings["labels"] = torch.where(encodings["labels"] == processor.tokenizer.pad_token_id,
+                                      -100, encodings["labels"])
     return encodings
 
+# Map the preprocessing function without multiprocessing
 train_dataset = train_dataset.map(
     preprocess_function,
     batched=True,
-    batch_size=4,
-    remove_columns=train_dataset.column_names,
-    num_proc=1
+    batch_size=2,
+    remove_columns=train_dataset.column_names
 )
 eval_dataset = eval_dataset.map(
     preprocess_function,
     batched=True,
-    batch_size=4,
-    remove_columns=eval_dataset.column_names,
-    num_proc=1
+    batch_size=2,
+    remove_columns=eval_dataset.column_names
 )
 
-# -------------------------------
-# 6. Updated training arguments (lightweight, T4 GPU compatible, better convergence)
-# -------------------------------
+##############################
+# Training Arguments and Trainer Setup
+##############################
 training_args = Seq2SeqTrainingArguments(
-    output_dir="trocr_results_final",
+    output_dir="trocr_results_improved",
     evaluation_strategy="steps",
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
     gradient_accumulation_steps=2,
     fp16=True,
-    learning_rate=2e-5,           # Lower learning rate for stability
-    num_train_epochs=12,          # More epochs
-    lr_scheduler_type="cosine",   # Cosine learning rate scheduler
+    learning_rate=3e-5,
+    num_train_epochs=10,
     save_total_limit=3,
-    save_steps=100,               # More frequent saves
-    eval_steps=100,               # More frequent evaluations
+    save_steps=200,
+    eval_steps=200,
     logging_steps=10,
     load_best_model_at_end=True,
     metric_for_best_model="cer",
     greater_is_better=False,
-    report_to=["tensorboard"],
+    warmup_steps=500,
     weight_decay=0.01,
-    push_to_hub=False,
-    predict_with_generate=True,
-    warmup_steps=800,             # More warmup steps
-    max_grad_norm=0.8,            # Prevent exploding gradients
-    adafactor=True,               # Adaptive optimizer for stability
-    seed=42
+    optim="adafactor",  # Using AdaFactor for efficiency
+    seed=42,
+    dataloader_num_workers=2,
+    report_to=["tensorboard"],
+    predict_with_generate=True
 )
 
-# -------------------------------
-# 7. Compute CER with text normalization
-# -------------------------------
-def normalize_text(text):
-    text = text.lower()
-    text = text.replace("\n", " ")
-    text = " ".join(text.split())
-    return text
-
 def compute_metrics(pred):
-    cer_metric = load_metric("cer")
+    metric = load_metric("cer")
     labels = pred.label_ids
     preds = pred.predictions
-
     preds = np.where(preds != -100, preds, processor.tokenizer.pad_token_id)
     labels = np.where(labels != -100, labels, processor.tokenizer.pad_token_id)
-
-    pred_str = processor.batch_decode(preds, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+    pred_str = processor.batch_decode(preds, skip_special_tokens=True, clean_up_tokenization_spaces=True, num_beams=10)
     label_str = processor.batch_decode(labels, skip_special_tokens=True)
+    return {"cer": metric.compute(predictions=pred_str, references=label_str)}
 
-    pred_str = [normalize_text(p) for p in pred_str]
-    label_str = [normalize_text(l) for l in label_str]
-
-    cer_val = cer_metric.compute(predictions=pred_str, references=label_str)
-    return {"cer": cer_val}
-
-# -------------------------------
-# 8. Initialize Trainer with early stopping
-# -------------------------------
 trainer = Seq2SeqTrainer(
     model=model,
     args=training_args,
@@ -295,29 +196,15 @@ trainer = Seq2SeqTrainer(
     tokenizer=processor.tokenizer,
     data_collator=default_data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(
-        early_stopping_patience=3,
-        early_stopping_threshold=0.001
-    )]
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)]
 )
 
-# -------------------------------
-# 9. Set seeds for reproducibility and train
-# -------------------------------
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
-
+##############################
+# Training and Saving the Model
+##############################
 trainer.train()
-
-# -------------------------------
-# 10. Save the final model and processor
-# -------------------------------
-model.save_pretrained("trocr_final_model")
-processor.save_pretrained("trocr_final_model")
-print("Model saved to trocr_final_model/")
-
-# Optional: Clean up CUDA cache
+model.save_pretrained("trocr_final_improved")
+processor.save_pretrained("trocr_final_improved")
+print("Model saved to 'trocr_final_improved/'.")
 torch.cuda.empty_cache()
+
