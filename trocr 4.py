@@ -30,11 +30,12 @@ processor = TrOCRProcessor.from_pretrained(MODEL_CHECKPOINT)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_CHECKPOINT)
 
 # Configure beam search and model regularization
-model.config.decoder.num_beams = 10
+model.config.decoder.num_beams = 9
 model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
 model.config.pad_token_id = processor.tokenizer.pad_token_id
-model.config.attention_dropout = 0.15
-model.config.activation_dropout = 0.15
+model.config.attention_dropout = 0.1
+model.config.activation_dropout = 0.1
+model.config.length_penalty = 0.8
 model.config.use_cache = False
 
 ##############################
@@ -71,7 +72,7 @@ def load_and_process_data():
     """
     dataset_dir = "dataset"
     image_dir = os.path.join(dataset_dir, "Images")
-    
+
     dataset_items = []
     for file in os.listdir(image_dir):
         if file.endswith(".xml"):
@@ -100,10 +101,11 @@ print(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
 # Data Augmentations and Preprocessing
 ##############################
 augmentation_transforms = transforms.Compose([
+    transforms.Grayscale(num_output_channels=3),
     transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2)], p=0.3),
-    transforms.RandomAffine(degrees=2, translate=(0.02, 0.02), shear=2, fill=255),
+    transforms.RandomAffine(degrees=3, translate=(0.02, 0.02), shear=2, fill=255),
     transforms.RandomApply([transforms.Lambda(lambda img: ImageOps.autocontrast(img))], p=0.3),
-    transforms.Resize((384, 384))  # Consider reducing to (256,256) if needed
+    transforms.Resize((256, 256))  
 ])
 
 def preprocess_function(examples):
@@ -158,20 +160,22 @@ training_args = Seq2SeqTrainingArguments(
     evaluation_strategy="steps",
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
-    gradient_accumulation_steps=2,
+    gradient_accumulation_steps=4,
     fp16=True,
     learning_rate=3e-5,
-    num_train_epochs=10,
+    lr_scheduler_type="cosine",
+    num_train_epochs=15,
     save_total_limit=3,
-    save_steps=200,
-    eval_steps=200,
+    save_steps=100,
+    eval_steps=100,
     logging_steps=10,
     load_best_model_at_end=True,
     metric_for_best_model="cer",
     greater_is_better=False,
     warmup_steps=500,
-    weight_decay=0.01,
-    optim="adafactor",  # Using AdaFactor for efficiency
+    warmup_ratio=0.1,
+    weight_decay=0.05,
+    optim="adamw_torch",  
     seed=42,
     dataloader_num_workers=2,
     report_to=["tensorboard"],
@@ -184,7 +188,7 @@ def compute_metrics(pred):
     preds = pred.predictions
     preds = np.where(preds != -100, preds, processor.tokenizer.pad_token_id)
     labels = np.where(labels != -100, labels, processor.tokenizer.pad_token_id)
-    pred_str = processor.batch_decode(preds, skip_special_tokens=True, clean_up_tokenization_spaces=True, num_beams=10)
+    pred_str = processor.batch_decode(preds, skip_special_tokens=True, clean_up_tokenization_spaces=True, num_beams=9)
     label_str = processor.batch_decode(labels, skip_special_tokens=True)
     return {"cer": metric.compute(predictions=pred_str, references=label_str)}
 
@@ -196,7 +200,7 @@ trainer = Seq2SeqTrainer(
     tokenizer=processor.tokenizer,
     data_collator=default_data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)]
+    #callbacks=[EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)]
 )
 
 ##############################
@@ -207,4 +211,5 @@ model.save_pretrained("trocr_final_improved")
 processor.save_pretrained("trocr_final_improved")
 print("Model saved to 'trocr_final_improved/'.")
 torch.cuda.empty_cache()
+
 
