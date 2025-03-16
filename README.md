@@ -1,4 +1,3 @@
-```markdown
 # TrOCR Fine-Tuning Pipelines for Printed & Handwritten Text Recognition
 
 This repository contains two lightweight and efficient pipelines for fine-tuning the [TrOCR](https://huggingface.co/microsoft/trocr-base-handwritten) model. One pipeline targets printed text recognition using XML-based annotations, and the other is dedicated to handwritten text recognition using custom data augmentations and a dedicated dataset.
@@ -86,7 +85,7 @@ This repository contains two lightweight and efficient pipelines for fine-tuning
    ```bash
    git clone https://github.com/your-username/your-repo.git
    cd your-repo
-   ```
+
 2. **Install Dependencies:**
    ```bash
    pip install -r requirements.txt
