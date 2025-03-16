@@ -6,7 +6,8 @@ This repository contains two lightweight and efficient pipelines for fine-tuning
 
 ## Overview
 
-- **Printed Text Recognition Pipeline:**  
+- **Printed Text Recognition Pipeline:**
+  -**Dataset Source:** # (https://www.kaggle.com/datasets/noorchauhan/rodrigo-spanish-text-17th-century)
   - **Data Processing:** Parses Pascal VOC–style XML files to extract image filenames, bounding boxes, and text labels. Each annotation is cropped from its corresponding image.
   - **Data Augmentation:** Uses `torchvision.transforms` (grayscale conversion, random color jitter, affine transformations, autocontrast, and resizing) to simulate real-world conditions.
   - **Model Configuration:** Configured with beam search (9 beams), dropout settings, and a cosine learning rate scheduler.  
@@ -14,7 +15,8 @@ This repository contains two lightweight and efficient pipelines for fine-tuning
   - **Graph:**  
     ![Printed Pipeline Loss & CER Graph](printed_pipeline_graph.png)
 
-- **Handwritten Text Recognition Pipeline:**  
+- **Handwritten Text Recognition Pipeline:**
+  - **Dataset Source:** # (https://github.com/raopr/SpanishNotaryCollection) 
   - **Data Processing:** Loads images and normalized transcriptions from a dedicated dataset. Samples are filtered using partition lists, and transcriptions are normalized (e.g., replacing underscores and specific characters).
   - **Data Augmentation:** Utilizes [Albumentations](https://albumentations.ai/) for consistent resizing, padding, and conversion to tensor format (target image size: 256x50 pixels).
   - **Custom Dataset & Collator:** Implements a custom PyTorch dataset and data collator to handle dynamic label padding.
