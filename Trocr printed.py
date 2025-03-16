@@ -59,7 +59,7 @@ test_ids = load_partition(os.path.join(PARTITIONS_DIR, 'test.txt'))
 # Build data samples and filter out empty transcriptions
 all_image_files = [f for f in os.listdir(IMAGES_DIR) if f.lower().endswith('.png')]
 data_samples = [(img_id, os.path.join(IMAGES_DIR, img_file), transcriptions[img_id])
-                for img_file in all_image_files 
+                for img_file in all_image_files
                 if (img_id := os.path.splitext(img_file)[0]) in transcriptions and transcriptions[img_id].strip()]
 print(f"Total paired samples (filtered): {len(data_samples)}")
 
@@ -72,7 +72,7 @@ val_samples = filter_samples(data_samples, val_ids)
 test_samples = filter_samples(data_samples, test_ids)
 
 # Define image augmentation pipeline
-def get_augmentation_pipeline(image_size=(384, 50)):
+def get_augmentation_pipeline(image_size=(256, 50)):
     return A.Compose([
         A.Resize(height=image_size[1], width=image_size[0], always_apply=True),
         A.PadIfNeeded(min_height=image_size[1], min_width=image_size[0], border_mode=0, value=0, always_apply=True),
@@ -81,7 +81,7 @@ def get_augmentation_pipeline(image_size=(384, 50)):
 
 # Define OCRDataset class with separate processing for images and text
 class OCRDataset(Dataset):
-    def __init__(self, samples, processor, image_size=(384, 50), max_text_length=512):
+    def __init__(self, samples, processor, image_size=(256, 50), max_text_length=512):
         self.samples = samples
         self.processor = processor
         self.transform = get_augmentation_pipeline(image_size)
@@ -120,8 +120,8 @@ def data_collator(batch):
     pixel_values = torch.stack([item["pixel_values"] for item in batch])
     labels = [item["labels"] for item in batch]
     padded_labels = torch.nn.utils.rnn.pad_sequence(
-        labels, 
-        batch_first=True, 
+        labels,
+        batch_first=True,
         padding_value=processor.tokenizer.pad_token_id
     )
     return {
@@ -139,8 +139,8 @@ model.config.decoder_start_token_id = processor.tokenizer.bos_token_id
 model.config.pad_token_id = processor.tokenizer.pad_token_id
 
 # Create datasets
-train_dataset = OCRDataset(train_samples, processor, image_size=(384, 50))
-val_dataset = OCRDataset(val_samples, processor, image_size=(384, 50))
+train_dataset = OCRDataset(train_samples, processor, image_size=(256, 50))
+val_dataset = OCRDataset(val_samples, processor, image_size=(256, 50))
 
 torch.cuda.empty_cache()
 
@@ -167,13 +167,15 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=4,
     num_train_epochs=10,  # Adjust as needed
     eval_strategy="epoch",
+    eval_accumulation_steps=1,
+    eval_do_concat_batches=False,
     save_strategy="epoch",
-    logging_steps=50,
+    logging_steps=30,
     learning_rate=3e-5,
     lr_scheduler_type="cosine",
     weight_decay=0.05,
     optim="adamw_torch",
-    fp16=False,  # Disable mixed precision temporarily
+    fp16=True,  # Disable mixed precision temporarily
     load_best_model_at_end=True,
     metric_for_best_model="cer",
     save_total_limit=2,
@@ -207,3 +209,4 @@ torch.cuda.empty_cache()
 model.save_pretrained("./trocr-small-finetuned")
 processor.save_pretrained("./trocr-small-finetuned")
 print("Fine-tuning complete and model saved.")
+
