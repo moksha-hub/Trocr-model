@@ -19,7 +19,7 @@ This repository contains two lightweight and efficient pipelines for fine-tuning
   - **Data Augmentation:** Utilizes [Albumentations](https://albumentations.ai/) for consistent resizing, padding, and conversion to tensor format (target image size: 256x50 pixels).
   - **Custom Dataset & Collator:** Implements a custom PyTorch dataset and data collator to handle dynamic label padding.
   - **Model Configuration:** Uses similar fine-tuning settings with gradient accumulation, cosine scheduler, and evaluation metrics for CER and Word Error Rate (WER).  
-  - **Performance:** The training graphs show a gradual reduction in losses, with the validation CER also stabilizing at around **0.23**.  
+  - **Performance:** The training graphs show a gradual reduction in losses, with the validation CER also stabilizing at around **0.46**.  
   - **Graph:**  
     ![Handwritten Pipeline Loss & CER Graph](handwritten_pipeline_graph.png)
 
