@@ -13,7 +13,6 @@ from evaluate import load
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 
-# Set random seed for reproducibility
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -159,13 +158,13 @@ def compute_metrics(eval_pred):
         "wer": wer_metric.compute(predictions=preds, references=refs)
     }
 
-# Define training arguments with fp16 disabled
+
 training_args = TrainingArguments(
     output_dir="./trocr-small-finetuned",
-    per_device_train_batch_size=1,  # Reduce batch size to prevent OOM
+    per_device_train_batch_size=1,  
     per_device_eval_batch_size=1,
     gradient_accumulation_steps=4,
-    num_train_epochs=10,  # Adjust as needed
+    num_train_epochs=10,  
     eval_strategy="epoch",
     eval_accumulation_steps=1,
     eval_do_concat_batches=False,
@@ -175,22 +174,22 @@ training_args = TrainingArguments(
     lr_scheduler_type="cosine",
     weight_decay=0.05,
     optim="adamw_torch",
-    fp16=True,  # Disable mixed precision temporarily
+    fp16=True, 
     load_best_model_at_end=True,
     metric_for_best_model="cer",
     save_total_limit=2,
-    report_to=[],  # Disable external logging
+    report_to=[],  
     dataloader_pin_memory=True
 )
 
-# Define a custom Trainer class to handle the 'num_items_in_batch' argument
+
 class CustomTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # Remove the 'num_items_in_batch' argument before passing to the model
+        
         inputs.pop("num_items_in_batch", None)
         return super().compute_loss(model, inputs, return_outputs)
 
-# Replace Trainer with CustomTrainer
+
 trainer = CustomTrainer(
     model=model,
     args=training_args,
