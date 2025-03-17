@@ -85,8 +85,8 @@ This repository contains two lightweight and efficient pipelines for fine-tuning
 
 1. **Clone the Repository:**
    ```bash
-   git clone https://github.com/your-username/your-repo.git
-   cd your-repo
+   git clone https://github.com/moksha-hub/Trocr-model.git
+   cd Trocr-model
 
 2. **Install Dependencies:**
    ```bash
@@ -97,8 +97,8 @@ This repository contains two lightweight and efficient pipelines for fine-tuning
 4. **Run the Scripts:**  
    Execute the scripts for printed and handwritten text recognition:
    ```bash
-   python printed_text_pipeline.py
-   python handwritten_text_pipeline.py
+   Trocr printed text.py
+   TrOCR handwritten text.py
    ```
 5. **Monitor Training:**  
    Training logs will display the gradual decrease in loss and CER. Graphs (e.g., `printed_pipeline_graph.png` and `handwritten_pipeline_graph.png`) capture these trends.
